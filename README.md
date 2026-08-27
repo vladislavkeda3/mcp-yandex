@@ -28,7 +28,7 @@ MCP-сервер для Яндекс.Почты (IMAP/SMTP), Яндекс.Кал
 ### Docker (рекомендуется)
 
 ```bash
-docker build -t mcp-yandex:1.0 .
+docker build -t mcp-yandex:latest .
 ```
 
 Локальные JDK и Maven не нужны — сборка целиком проходит внутри multi-stage образа.
