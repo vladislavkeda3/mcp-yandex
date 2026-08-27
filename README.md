@@ -1,7 +1,7 @@
 # mcp-yandex
 
-MCP-сервер для Яндекс.Почты (IMAP/SMTP) и Яндекс.Календаря (CalDAV). Работает с личными аккаунтами и Яндекс 360 для
-бизнеса.
+MCP-сервер для Яндекс.Почты (IMAP/SMTP), Яндекс.Календаря (CalDAV) и Яндекс.Диска (WebDAV).
+Работает с личными аккаунтами и Яндекс 360 для бизнеса.
 
 ## Инструменты
 
@@ -16,13 +16,19 @@ MCP-сервер для Яндекс.Почты (IMAP/SMTP) и Яндекс.Ка
 | `calendar_list_events`    | События на день (включая повторяющиеся)                                |
 | `calendar_get_event`      | Детали события: участники, описание, ссылка на встречу, вложения       |
 | `calendar_create_event`   | Создаёт встречу, участникам уходят приглашения                         |
+| `disk_list`               | Содержимое папки Диска: имена, типы, размеры, даты                     |
+| `disk_download`           | Скачивает файл с Диска на локальный диск                               |
+| `disk_upload`             | Загружает локальный файл на Диск                                       |
+| `disk_mkdir`              | Создаёт папку на Диске                                                 |
+| `disk_move`               | Перемещает/переименовывает файл или папку                              |
+| `disk_delete`             | Удаляет файл или папку (необратимо через API)                          |
 
 ## Сборка
 
 ### Docker (рекомендуется)
 
 ```bash
-docker build -t yandex-mcp:1.0 .
+docker build -t mcp-yandex:1.0 .
 ```
 
 Локальные JDK и Maven не нужны — сборка целиком проходит внутри multi-stage образа.
@@ -33,7 +39,7 @@ docker build -t yandex-mcp:1.0 .
 
 ```bash
 mvn package
-# → target/yandex-mcp-1.0.jar (fat jar)
+# → target/mcp-yandex-1.0.jar (fat jar)
 ```
 
 Требуется JDK 21+.
@@ -45,8 +51,9 @@ mvn package
 
 1. Пароль типа **«Почта»** → `YANDEX_MAIL_PASSWORD`
 2. Пароль типа **«Календарь»** → `YANDEX_CALDAV_PASSWORD`
+3. Пароль типа **«Файлы»** → `YANDEX_DISK_PASSWORD`
 
-Либо используйте OAuth-токен (`YANDEX_OAUTH_TOKEN`) — он применяется и к почте (XOAUTH2), и к календарю.
+Либо используйте OAuth-токен (`YANDEX_OAUTH_TOKEN`) — он применяется к почте (XOAUTH2), календарю и диску.
 Для Яндекс 360 может потребоваться, чтобы администратор организации разрешил IMAP и пароли приложений.
 
 ### Переменные окружения
@@ -56,10 +63,11 @@ mvn package
 | `YANDEX_EMAIL`               | да          | Адрес почты (логин), например `user@company.ru`                 |
 | `YANDEX_MAIL_PASSWORD`       | *           | Пароль приложения «Почта»                                       |
 | `YANDEX_CALDAV_PASSWORD`     | *           | Пароль приложения «Календарь»                                   |
+| `YANDEX_DISK_PASSWORD`       | *           | Пароль приложения «Файлы» (WebDAV Яндекс.Диска)                 |
 | `YANDEX_OAUTH_TOKEN`         | *           | OAuth-токен (вместо паролей приложений)                         |
 | `YANDEX_MCP_ATTACHMENTS_DIR` | нет         | Куда сохранять вложения (по умолчанию `~/Downloads/yandex-mcp`) |
 
-\* нужен OAuth-токен **или** хотя бы один пароль приложения; инструменты почты/календаря
+\* нужен OAuth-токен **или** хотя бы один пароль приложения; инструменты почты/календаря/диска
 регистрируются только при наличии соответствующих учётных данных.
 
 ## Подключение к Claude Code
@@ -71,10 +79,11 @@ claude mcp add yandex \
   --env YANDEX_EMAIL=user@company.ru \
   --env YANDEX_MAIL_PASSWORD=xxxx \
   --env YANDEX_CALDAV_PASSWORD=yyyy \
+  --env YANDEX_DISK_PASSWORD=zzzz \
   -- docker run -i --rm \
-     -e YANDEX_EMAIL -e YANDEX_MAIL_PASSWORD -e YANDEX_CALDAV_PASSWORD \
-     -v "$HOME/Downloads/yandex-mcp:/attachments" \
-     yandex-mcp:1.0
+     -e YANDEX_EMAIL -e YANDEX_MAIL_PASSWORD -e YANDEX_CALDAV_PASSWORD -e YANDEX_DISK_PASSWORD \
+     -v "$HOME/.mcp/yandex-mcp/attachments:/attachments" \
+     mcp-yandex:1.0
 ```
 
 Или вручную в `.mcp.json`:
@@ -89,8 +98,9 @@ claude mcp add yandex \
         "-e", "YANDEX_EMAIL=user@company.ru",
         "-e", "YANDEX_MAIL_PASSWORD=xxxx",
         "-e", "YANDEX_CALDAV_PASSWORD=yyyy",
+        "-e", "YANDEX_DISK_PASSWORD=zzzz",
         "-v", "/Users/вы/Downloads/yandex-mcp:/attachments",
-        "yandex-mcp:1.0"
+        "mcp-yandex:1.0"
       ]
     }
   }
@@ -98,7 +108,7 @@ claude mcp add yandex \
 ```
 
 Флаг `-i` обязателен (обмен идёт через stdin/stdout), `-t` не нужен. Том `-v` нужен только
-для `mail_save_attachment` — без него вложения останутся внутри контейнера.
+для `mail_save_attachment` и `disk_download`/`disk_upload` — без него файлы останутся внутри контейнера.
 
 ### Через локальный jar
 
@@ -107,7 +117,8 @@ claude mcp add yandex \
   --env YANDEX_EMAIL=user@company.ru \
   --env YANDEX_MAIL_PASSWORD=xxxx \
   --env YANDEX_CALDAV_PASSWORD=yyyy \
-  -- java -jar /абсолютный/путь/к/target/yandex-mcp-1.0.jar
+  --env YANDEX_DISK_PASSWORD=zzzz \
+  -- java -jar /абсолютный/путь/к/target/mcp-yandex-1.0.jar
 ```
 
 Или вручную в `.mcp.json`:
@@ -119,12 +130,13 @@ claude mcp add yandex \
       "command": "java",
       "args": [
         "-jar",
-        "/абсолютный/путь/к/target/yandex-mcp-1.0.jar"
+        "/абсолютный/путь/к/target/mcp-yandex-1.0.jar"
       ],
       "env": {
         "YANDEX_EMAIL": "user@company.ru",
         "YANDEX_MAIL_PASSWORD": "xxxx",
-        "YANDEX_CALDAV_PASSWORD": "yyyy"
+        "YANDEX_CALDAV_PASSWORD": "yyyy",
+        "YANDEX_DISK_PASSWORD": "zzzz"
       }
     }
   }
@@ -133,7 +145,8 @@ claude mcp add yandex \
 
 ## Примечания
 
-- Хосты: `imap.yandex.ru:993`, `smtp.yandex.ru:465`, `caldav.yandex.ru`.
+- Хосты: `imap.yandex.ru:993`, `smtp.yandex.ru:465`, `caldav.yandex.ru`, `webdav.yandex.ru`.
 - Основной календарь — `/calendars/{email}/events-default/`; другие календари смотрите через `calendar_list_calendars`.
 - Ссылка на встречу ищется в свойствах `X-TELEMOST-CONFERENCE`, `CONFERENCE`, `URL` и в тексте описания.
 - Времена событий выводятся в системном часовом поясе; при создании встречи время без оффсета трактуется как локальное.
+- Пути на Диске указываются от корня, например `/Документы/отчёт.xlsx`; кириллица и пробелы поддерживаются.

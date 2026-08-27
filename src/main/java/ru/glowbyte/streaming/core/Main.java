@@ -1,6 +1,7 @@
 package ru.glowbyte.streaming.core;
 
 import io.modelcontextprotocol.json.McpJsonMapper;
+import io.modelcontextprotocol.json.TypeRef;
 import io.modelcontextprotocol.json.jackson3.JacksonMcpJsonMapper;
 import io.modelcontextprotocol.server.McpServer;
 import io.modelcontextprotocol.server.McpServerFeatures.SyncToolSpecification;
@@ -16,11 +17,12 @@ import java.io.InputStream;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 
-/** MCP-сервер для Яндекс.Почты (IMAP/SMTP) и Яндекс.Календаря (CalDAV). */
+/** MCP-сервер для Яндекс.Почты (IMAP/SMTP), Яндекс.Календаря (CalDAV) и Яндекс.Диска (WebDAV). */
 public class Main {
 
     public static void main(String[] args) throws Exception {
@@ -36,6 +38,9 @@ public class Main {
         }
         if (config.caldavConfigured()) {
             registerCalendarTools(tools, mapper, new CaldavService(config));
+        }
+        if (config.diskConfigured()) {
+            registerDiskTools(tools, mapper, new DiskService(config), config);
         }
 
         // Следим за EOF на stdin: когда клиент отключается, процесс должен завершиться
@@ -62,7 +67,7 @@ public class Main {
         };
 
         McpServer.sync(new StdioServerTransportProvider(mapper, stdin, System.out))
-                .serverInfo("yandex-mcp", "1.0.0")
+                .serverInfo("yandex-mcp", "1.1.0")
                 .capabilities(ServerCapabilities.builder().tools(true).build())
                 .tools(tools)
                 .build();
@@ -202,6 +207,74 @@ public class Main {
                         str(arguments, "calendar", null))));
     }
 
+    // ---------- диск ----------
+
+    private static void registerDiskTools(List<SyncToolSpecification> tools, McpJsonMapper mapper,
+                                          DiskService disk, Config config) {
+        tools.add(tool(mapper, "disk_list",
+                "Содержимое папки Яндекс.Диска: имена, типы (файл/папка), размеры, даты изменения",
+                """
+                {"type":"object","properties":{
+                  "path":{"type":"string","description":"Путь к папке, по умолчанию корень «/»"}
+                }}
+                """,
+                arguments -> disk.list(str(arguments, "path", "/"))));
+
+        tools.add(tool(mapper, "disk_download",
+                "Скачивает файл с Яндекс.Диска на локальный диск и возвращает путь",
+                """
+                {"type":"object","properties":{
+                  "path":{"type":"string","description":"Путь к файлу на Диске"},
+                  "target_dir":{"type":"string","description":"Локальный каталог (по умолчанию из конфигурации)"}
+                },"required":["path"]}
+                """,
+                arguments -> {
+                    String dir = str(arguments, "target_dir", null);
+                    Path target = dir != null ? Paths.get(dir) : config.attachmentsDir();
+                    return disk.download(str(arguments, "path", null), target);
+                }));
+
+        tools.add(tool(mapper, "disk_upload",
+                "Загружает локальный файл на Яндекс.Диск",
+                """
+                {"type":"object","properties":{
+                  "local_path":{"type":"string","description":"Путь к локальному файлу"},
+                  "remote_path":{"type":"string","description":"Куда положить на Диске: путь к файлу или папке (с завершающим «/»)"}
+                },"required":["local_path","remote_path"]}
+                """,
+                arguments -> disk.upload(str(arguments, "local_path", null), str(arguments, "remote_path", null))));
+
+        tools.add(tool(mapper, "disk_mkdir",
+                "Создаёт папку на Яндекс.Диске",
+                """
+                {"type":"object","properties":{
+                  "path":{"type":"string","description":"Путь новой папки"}
+                },"required":["path"]}
+                """,
+                arguments -> disk.mkdir(str(arguments, "path", null))));
+
+        tools.add(tool(mapper, "disk_move",
+                "Перемещает или переименовывает файл/папку на Яндекс.Диске",
+                """
+                {"type":"object","properties":{
+                  "from":{"type":"string","description":"Текущий путь"},
+                  "to":{"type":"string","description":"Новый путь"},
+                  "overwrite":{"type":"boolean","description":"Перезаписать, если целевой путь занят (по умолчанию false)"}
+                },"required":["from","to"]}
+                """,
+                arguments -> disk.move(str(arguments, "from", null), str(arguments, "to", null),
+                        boolArg(arguments, "overwrite"))));
+
+        tools.add(tool(mapper, "disk_delete",
+                "Удаляет файл или папку на Яндекс.Диске (папку — вместе с содержимым). Действие необратимо через API",
+                """
+                {"type":"object","properties":{
+                  "path":{"type":"string","description":"Путь к файлу или папке"}
+                },"required":["path"]}
+                """,
+                arguments -> disk.delete(str(arguments, "path", null))));
+    }
+
     // ---------- инфраструктура ----------
 
     @FunctionalInterface
@@ -209,14 +282,22 @@ public class Main {
         Object handle(Map<String, Object> arguments) throws Exception;
     }
 
+    private static final TypeRef<HashMap<String, Object>> MAP_TYPE_REF = new TypeRef<>() {
+    };
+
     private static SyncToolSpecification tool(McpJsonMapper mapper, String name, String description,
                                               String schema, ToolHandler handler) {
+        final Tool tool;
+        try {
+            tool = Tool.builder(name, mapper.readValue(schema, MAP_TYPE_REF))
+                    .description(description)
+                    .build();
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
+
         return SyncToolSpecification.builder()
-                .tool(Tool.builder()
-                        .name(name)
-                        .description(description)
-                        .inputSchema(mapper, schema)
-                        .build())
+                .tool(tool)
                 .callHandler((exchange, request) -> {
                     try {
                         Object result = handler.handle(request.arguments() != null ? request.arguments() : Map.of());
@@ -244,6 +325,7 @@ public class Main {
         return v instanceof Number n ? n.intValue() : defaultValue;
     }
 
+    @SuppressWarnings("SameParameterValue")
     private static long longArg(Map<String, Object> arguments, String key) {
         Object v = arguments.get(key);
         if (v instanceof Number n) {

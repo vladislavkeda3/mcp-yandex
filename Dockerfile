@@ -13,7 +13,7 @@ RUN mvn -q -B package
 FROM eclipse-temurin:21-jre-alpine
 WORKDIR /app
 
-COPY --from=build /build/target/yandex-mcp-*.jar /app/yandex-mcp.jar
+COPY --from=build /build/target/mcp-yandex-*.jar /app/mcp-yandex.jar
 
 # Вложения сохраняются сюда; примонтируйте каталог хоста через -v
 ENV YANDEX_MCP_ATTACHMENTS_DIR=/attachments
@@ -21,4 +21,4 @@ ENV YANDEX_MCP_ATTACHMENTS_DIR=/attachments
 ENV TZ=Europe/Moscow
 RUN apk add --no-cache tzdata && mkdir -p /attachments
 
-ENTRYPOINT ["java", "-jar", "/app/yandex-mcp.jar"]
+ENTRYPOINT ["java", "-jar", "/app/mcp-yandex.jar"]
