@@ -35,6 +35,26 @@ docker build -t mcp-yandex:latest .
 В образе задан часовой пояс `Europe/Moscow` (переопределяется переменной `TZ`),
 вложения сохраняются в `/attachments` — примонтируйте туда каталог хоста.
 
+### Транспорты
+
+- **Streamable HTTP (для постоянного сервера):** задаётся `YANDEX_MCP_TRANSPORT=http`.
+  Один контейнер обслуживает много клиентов, копии не плодятся:
+
+  ```bash
+  docker run -d --restart unless-stopped --name mcp-yandex \
+    -p 127.0.0.1:8191:8081 \
+    -e YANDEX_MCP_TRANSPORT=http \
+    -e YANDEX_EMAIL=... -e YANDEX_MAIL_PASSWORD=... \
+    -e YANDEX_CALDAV_PASSWORD=... -e YANDEX_DISK_PASSWORD=... \
+    -v "$HOME/.mcp/yandex-mcp/attachments:/attachments" \
+    mcp-yandex:latest
+  # Endpoint для MCP-клиентов: http://127.0.0.1:8191/mcp
+  ```
+
+  Порт — `YANDEX_MCP_HTTP_PORT` (по умолчанию `8081`), путь — `YANDEX_MCP_HTTP_ENDPOINT` (по умолчанию `/mcp`).
+
+- **stdio (по умолчанию):** обмен через stdin/stdout (`docker run -i --rm ...`).
+
 ### Альтернатива: локальный jar
 
 ```bash
@@ -66,6 +86,9 @@ mvn package
 | `YANDEX_DISK_PASSWORD`       | *           | Пароль приложения «Файлы» (WebDAV Яндекс.Диска)                 |
 | `YANDEX_OAUTH_TOKEN`         | *           | OAuth-токен (вместо паролей приложений)                         |
 | `YANDEX_MCP_ATTACHMENTS_DIR` | нет         | Куда сохранять вложения (по умолчанию `~/Downloads/yandex-mcp`) |
+| `YANDEX_MCP_TRANSPORT`       | нет         | `stdio` (по умолчанию) или `http` — постоянный streamable HTTP-сервер |
+| `YANDEX_MCP_HTTP_PORT`       | нет         | Порт HTTP-режима (по умолчанию `8081`) |
+| `YANDEX_MCP_HTTP_ENDPOINT`   | нет         | Путь MCP endpoint в HTTP-режиме (по умолчанию `/mcp`) |
 
 \* нужен OAuth-токен **или** хотя бы один пароль приложения; инструменты почты/календаря/диска
 регистрируются только при наличии соответствующих учётных данных.

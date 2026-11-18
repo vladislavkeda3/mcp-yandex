@@ -19,6 +19,12 @@
             <artifactId>mcp</artifactId>
             <version>2.0.0</version>
         </dependency>
+        <!-- Embedded Tomcat для режима YANDEX_MCP_TRANSPORT=http (servlet-транспорт MCP SDK) -->
+        <dependency>
+            <groupId>org.apache.tomcat.embed</groupId>
+            <artifactId>tomcat-embed-core</artifactId>
+            <version>11.0.14</version>
+        </dependency>
         <dependency>
             <groupId>org.eclipse.angus</groupId>
             <artifactId>angus-mail</artifactId>

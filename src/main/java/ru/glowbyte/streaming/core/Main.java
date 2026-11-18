@@ -5,10 +5,13 @@ import io.modelcontextprotocol.json.TypeRef;
 import io.modelcontextprotocol.json.jackson3.JacksonMcpJsonMapper;
 import io.modelcontextprotocol.server.McpServer;
 import io.modelcontextprotocol.server.McpServerFeatures.SyncToolSpecification;
+import io.modelcontextprotocol.server.transport.HttpServletStreamableServerTransportProvider;
 import io.modelcontextprotocol.server.transport.StdioServerTransportProvider;
 import io.modelcontextprotocol.spec.McpSchema.CallToolResult;
 import io.modelcontextprotocol.spec.McpSchema.ServerCapabilities;
 import io.modelcontextprotocol.spec.McpSchema.Tool;
+import org.apache.catalina.Context;
+import org.apache.catalina.startup.Tomcat;
 import tools.jackson.databind.json.JsonMapper;
 
 import java.io.FilterInputStream;
@@ -41,6 +44,15 @@ public class Main {
         }
         if (config.diskConfigured()) {
             registerDiskTools(tools, mapper, new DiskService(config), config);
+        }
+
+        // Транспорт: stdio (по умолчанию, для docker run -i) или http
+        // (постоянный сервер для многих клиентов; настраивается через
+        // YANDEX_MCP_TRANSPORT=http, YANDEX_MCP_HTTP_PORT, YANDEX_MCP_HTTP_ENDPOINT)
+        String transport = System.getenv().getOrDefault("YANDEX_MCP_TRANSPORT", "stdio").trim().toLowerCase();
+        if (transport.equals("http")) {
+            startHttp(config, mapper, tools);
+            return;
         }
 
         // Следим за EOF на stdin: когда клиент отключается, процесс должен завершиться
@@ -76,6 +88,35 @@ public class Main {
         // небольшая пауза, чтобы транспорт дописал ответы в stdout
         Thread.sleep(500);
         System.exit(0);
+    }
+
+    /** Streamable HTTP: постоянный сервер на embedded Tomcat, обслуживает много клиентов одновременно. */
+    private static void startHttp(Config config, McpJsonMapper mapper, List<SyncToolSpecification> tools) throws Exception {
+        String endpoint = System.getenv().getOrDefault("YANDEX_MCP_HTTP_ENDPOINT", "/mcp").trim();
+        int port = Integer.parseInt(System.getenv().getOrDefault("YANDEX_MCP_HTTP_PORT", "8081").trim());
+
+        HttpServletStreamableServerTransportProvider transportProvider =
+                HttpServletStreamableServerTransportProvider.builder()
+                        .jsonMapper(mapper)
+                        .mcpEndpoint(endpoint)
+                        .build();
+
+        McpServer.sync(transportProvider)
+                .serverInfo("yandex-mcp", "1.1.0")
+                .capabilities(ServerCapabilities.builder().tools(true).build())
+                .tools(tools)
+                .build();
+
+        Tomcat tomcat = new Tomcat();
+        tomcat.setBaseDir(java.nio.file.Files.createTempDirectory("yandex-mcp-tomcat").toString());
+        tomcat.setPort(port);
+        tomcat.getConnector(); // без этого connector не добавляется в service и порт никто не слушает
+        Context ctx = tomcat.addContext("", null);
+        Tomcat.addServlet(ctx, "mcp", transportProvider).setAsyncSupported(true);
+        ctx.addServletMappingDecoded(endpoint, "mcp");
+        tomcat.start();
+        System.err.println("yandex-mcp: streamable HTTP на " + endpoint + ", порт " + port);
+        tomcat.getServer().await();
     }
 
     // ---------- почта ----------
