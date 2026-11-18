@@ -11,7 +11,10 @@ import io.modelcontextprotocol.spec.McpSchema.CallToolResult;
 import io.modelcontextprotocol.spec.McpSchema.ServerCapabilities;
 import io.modelcontextprotocol.spec.McpSchema.Tool;
 import org.apache.catalina.Context;
+import org.apache.catalina.filters.SetCharacterEncodingFilter;
 import org.apache.catalina.startup.Tomcat;
+import org.apache.tomcat.util.descriptor.web.FilterDef;
+import org.apache.tomcat.util.descriptor.web.FilterMap;
 import tools.jackson.databind.json.JsonMapper;
 
 import java.io.FilterInputStream;
@@ -112,6 +115,23 @@ public class Main {
         tomcat.setPort(port);
         tomcat.getConnector(); // без этого connector не добавляется в service и порт никто не слушает
         Context ctx = tomcat.addContext("", null);
+
+        // Клиенты обычно присылают Content-Type: application/json без charset, и сервлет
+        // по умолчанию читает тело как ISO-8859-1. Тогда кириллица в аргументах (пути Диска,
+        // имена папок почты) превращается в «ÐÐ°Ð³ÑÑÐ·ÐºÐ¸» и запросы уходят на несуществующие
+        // пути (404). JSON по стандарту всегда UTF-8, поэтому charset клиента игнорируем.
+        FilterDef utf8Body = new FilterDef();
+        utf8Body.setFilterName("utf8-body");
+        utf8Body.setFilterClass(SetCharacterEncodingFilter.class.getName());
+        utf8Body.addInitParameter("encoding", "UTF-8");
+        utf8Body.addInitParameter("ignore", "true");
+        ctx.addFilterDef(utf8Body);
+
+        FilterMap utf8Mapping = new FilterMap();
+        utf8Mapping.setFilterName("utf8-body");
+        utf8Mapping.addURLPattern("/*");
+        ctx.addFilterMap(utf8Mapping);
+
         Tomcat.addServlet(ctx, "mcp", transportProvider).setAsyncSupported(true);
         ctx.addServletMappingDecoded(endpoint, "mcp");
         tomcat.start();
